@@ -1,6 +1,7 @@
 /* Small template library for basic
  * logic elements & circuits compile-time
  * simulation (2020)
+ * Author: fabulous.faberge@yandex.ru
  */
 
 #include <iostream>
@@ -54,6 +55,13 @@ struct _XOR {
   /* XOR gate */
   using result = typename _NAND<typename _NAND<typename _NAND<A, B>::result, A>::result,
                                 typename _NAND<typename _NAND<A, B>::result, B>::result>::result;
+};
+
+template<typename A, typename B, typename S>
+struct _MUX {
+  /* MUX block */
+  using result = typename _OR<typename _AND<A, typename _NOT<S>::result>::result,
+                              typename _AND<B, S>::result>::result;
 };
 
 template<typename A, typename B>
@@ -126,7 +134,42 @@ struct _DIM {
       using bit = typename std::tuple_element_t<N, sum>;
     };
   };
-  
+
+  /* MUX block */
+  struct MUX {
+    template<typename OP1, typename OP2, typename S>
+    struct OP {
+      template<int N>
+      using _bit = typename _MUX<std::tuple_element_t<D - N - 1, OP1>,
+                                 std::tuple_element_t<D - N - 1, OP2>, S>::result;
+
+      template<int N>
+      using _result = decltype(std::tuple_cat(std::declval<std::tuple<_bit<d>>>(),
+                                              std::declval<typename _DIM<D, d - 1>::MUX::
+                                              template OP<OP1, OP2, S>::
+                                              template _result<d - 1>>()));
+
+      using result = _result<d>;
+
+      template<int N>
+      using bit = typename std::tuple_element_t<N, result>;
+     };
+   };
+
+  /* Convert block */
+  template<typename T, int M = std::tuple_size<T>() - 1>
+  struct CONV {
+    template<int N>
+    using _bit = typename std::conditional_t<N <= M, typename 
+                          std::tuple_element_t<N <= M ? M - N : (D - N - 1) % M, T>, O>;
+
+    template<int N>
+    using _result = decltype(std::tuple_cat(std::declval<std::tuple<_bit<d>>>(),
+                                            std::declval<typename _DIM<D, d - 1>::
+                                            template CONV<T>::template _result<d - 1>>()));
+    using result = _result<d>;
+  };
+
   /* Alias names for convinience */
   using NAND = EXP<_NAND>;
   using NOT  = EXP<_NOT>;
@@ -150,7 +193,6 @@ struct _DIM<D, 0> {
 
       template<int N>
       using _result = std::tuple<_bit<N>>;
-
     };
   };
 
@@ -172,20 +214,65 @@ struct _DIM<D, 0> {
       using _carry = std::tuple<_bit_carry<N>>;
     };
   };
+
+  /* MUX block */
+  struct MUX {
+    template<typename OP1, typename OP2, typename S>
+    struct OP {
+      template<int N>
+      using _bit = typename _MUX<std::tuple_element_t<D - 1, OP1>,
+                                 std::tuple_element_t<D - 1, OP2>, S>::result;
+
+      template<int N>
+      using _result = std::tuple<_bit<N>>;
+    };
+  };
+
+  /* Convert block  */
+  template<typename T, int M = std::tuple_size<T>() - 1>
+  struct CONV {
+    template<int N>
+    using _bit = typename std::tuple_element_t<M, T>;
+
+    template<int N>
+    using _result = std::tuple<_bit<N>>;
+  };
 };
 
-/* Main class */
+/* Main unit */
 template<int D>
 struct DIM : public _DIM<D> {
 
+  /* ALU block */
+  template<typename F>
+  struct ALU {
+    template<typename OP1, typename OP2>
+    struct OP {
+      /* MUX and NOT for second operand */
+      using _not_op2 = typename _DIM<D>::NOT::template OP<OP2>::result;
+      using _mux_op2 = typename _DIM<D>::MUX::template OP<OP2, _not_op2, std::tuple_element_t<0, F>>::result;
+
+      /* Logical operations */
+      using _or_ops  = typename _DIM<D>::OR::template OP<OP1, _mux_op2>::result;
+      using _and_ops = typename _DIM<D>::AND::template OP<OP1, _mux_op2>::result;
+      using _mux_log = typename _DIM<D>::MUX::template OP<_or_ops, _and_ops, std::tuple_element_t<1, F>>::result;
+
+      /* Addition and substraction */
+      using _sum_ops = typename _DIM<D>::ADD::template OP<OP1, _mux_op2, std::tuple_element_t<0, F>>::sum;
+      using _mux_sum = typename _DIM<D>::MUX::template OP<_sum_ops, _sum_ops, std::tuple_element_t<1, F>>::result;      
+
+      /* Final result */
+      using result = typename  _DIM<D>::MUX::template OP<_mux_log, _mux_sum, std::tuple_element_t<2, F>>::result;
+    }; 
+  };
 };
 
-/* Alias names for convinience */
+/* Alias DIM names for convinience */
 using BIT   = DIM<1>;
 using BYTE  = DIM<8>;
 using WORD  = DIM<16>;
 using DWORD = DIM<32>;
-using QWORD = DIM<64>;
+using QWORD = DIM<64>; 
 
 /* Utility 'print' function */
 template<typename T>
@@ -216,16 +303,30 @@ struct print<T, 0> {
   }
 };
 
-using OP1 = std::tuple< O, O, I, O, I, I, O, I >;
-using OP2 = std::tuple< O, I, O, I, O, O, I, I >;
-using OP3 = std::tuple< O, O, O, O, O, O, O, I >;
+/* ALU instruction set */
+using OR  = std::tuple< O, O, O >;
+using AND = std::tuple< O, I, O >;
+using SUM = std::tuple< O, O, I >;
+using SUB = std::tuple< I, O, I >;
 
-using R1  = BYTE::ADD::OP<OP1, OP2>::sum;
-using R2  = BYTE::AND::OP<OP1, OP3>::result;
+/* Some operands */
+using OP1 = WORD::CONV< std::tuple< O, O, I, O, I, I, O, I > >::result;
+using OP2 = WORD::CONV< std::tuple< O, I, O, I, O, O, I, I > >::result;
 
+/* Register values */
+using R0  = WORD::ALU<SUM>::OP<OP1, OP2>::result;
+using R1  = WORD::ALU<AND>::OP<OP1, OP2>::result;
+ 
 int main() {
+  cout << "Operands: " << endl << "OP1: ";
+  print<OP1>::out();
+  cout << endl << "OP2: ";
+  print<OP2>::out();
+  cout << endl << endl;;
+
+  cout << "Results: " << endl << "SUM: "; 
+  print<R0>::out();
+  cout << endl << "AND: ";
   print<R1>::out();
-  cout << endl;
-  print<R2>::out();
   cout << endl;
 }
