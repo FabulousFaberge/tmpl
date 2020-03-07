@@ -1,7 +1,6 @@
 /* Small template library for basic
  * logic elements & circuits compile-time
  * simulation (2020)
- * Author: fabulous.faberge@yandex.ru
  */
 
 #include <iostream>
